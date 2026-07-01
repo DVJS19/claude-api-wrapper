@@ -1,8 +1,8 @@
 import uuid
 import os
 from contextlib import asynccontextmanager
-
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
+from app.resilience.fallback import ServiceUnavailableError, execute_with_fallback
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.adapters.selector import selector
@@ -114,15 +114,32 @@ async def generate(
         max_tokens=max_tokens,
     )
 
-    # Call the model — compose_system_prompt() runs inside the adapter
-    result = await selection.adapter.generate(
-        caller_context=request.system_context or "",
-        user_prompt=request.prompt,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    # Determine which adapter is primary vs fallback for this request.
+    # The selector already picked one based on cost — the other is the fallback
+    # for failure-triggered routing.
+    is_primary_selected = selection.adapter.model_name == settings.primary_model
+    primary_adapter  = selection.adapter          if is_primary_selected else selector._fallback
+    fallback_adapter = selector._fallback         if is_primary_selected else selector._primary
 
-    fallback_used = result.model_name != settings.primary_model
+    try:
+        result, failure_fallback_used = await execute_with_fallback(
+            primary_adapter=primary_adapter,
+            fallback_adapter=fallback_adapter,
+            caller_context=request.system_context or "",
+            user_prompt=request.prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except ServiceUnavailableError as e:
+        log.error("generate_both_adapters_failed",
+                  client_id=client_id, request_id=request_id, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable. Please retry shortly.",
+        )
+
+    # fallback_used is True if cost routing OR failure routing chose the fallback
+    fallback_used = (selection.adapter.model_name != settings.primary_model) or failure_fallback_used
 
     log.info(
         "generate_request_completed",
@@ -139,7 +156,7 @@ async def generate(
     return GenerateResponse(
         text=result.text,
         model_used=result.model_name,
-        fallback_used=fallback_used,
+        fallback_used=fallback_used,    # ← updated variable
         usage=UsageInfo(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
