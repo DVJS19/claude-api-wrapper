@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      ANTHROPIC_API_KEY:              sk-ant-test-placeholder
+      PRIMARY_MODEL:                  claude-sonnet-4-6
+      FALLBACK_MODEL:                 claude-haiku-4-5
+      MAX_OUTPUT_TOKENS:              "4096"
+      OAUTH_JWT_SECRET:               test-secret-for-ci-only
+      OAUTH_JWT_ALGORITHM:            HS256
+      OAUTH_TOKEN_EXPIRY_SECONDS:     "3600"
+      COST_ROUTE_THRESHOLD_USD:       "0.05"
+      DAILY_SOFT_BUDGET_USD:          "5.00"
+      DAILY_HARD_BUDGET_USD:          "10.00"
+      RATE_LIMIT_REQUESTS_PER_MINUTE: "20"
+      RATE_LIMIT_BURST_SIZE:          "5"
+      REQUEST_TIMEOUT_SECONDS:        "30"
+      RETRY_MAX_ATTEMPTS:             "3"
+      RETRY_BACKOFF_BASE_SECONDS:     "1.0"
+      CIRCUIT_BREAKER_FAILURE_THRESHOLD: "5"
+      CIRCUIT_BREAKER_RECOVERY_SECONDS:  "30"
+      MAX_PROMPT_LENGTH_CHARS:        "8000"
+      PROMPT_INJECTION_CHECK_ENABLED: "true"
+      APP_ENV:                        development
+      LOG_LEVEL:                      INFO
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short
+
+      - name: Lint
+        run: uv run ruff check .

@@ -1,7 +1,7 @@
 import uuid
 import os
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status, Response
 from app.resilience.fallback import ServiceUnavailableError, execute_with_fallback
 from fastapi.security import OAuth2PasswordRequestForm
 from app.security.input_validator import (
@@ -10,7 +10,7 @@ from app.security.input_validator import (
 )
 from app.security.output_validator import validate_output
 from app.security.prompt_guard import PromptInjectionError, check_prompt_injection
-
+from app.observability.middleware import AuditMiddleware
 from app.adapters.sonnet_adapter import SonnetAdapter
 from app.adapters.haiku_adapter import HaikuAdapter
 from app.adapters.selector import selector
@@ -63,6 +63,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(AuditMiddleware)
+
 
 # ── Public endpoints ───────────────────────────────────────────────────────────
 
@@ -95,6 +97,7 @@ async def usage(client_id: str = Depends(get_current_client_id)):
 async def generate(
     request: GenerateRequest,
     client_id: str = Depends(get_current_client_id),
+    response: Response = None,
 ) -> GenerateResponse:
     """
     Generate a response from Claude.
@@ -245,6 +248,9 @@ async def generate(
         cost_usd=result.cost_usd,
         selection_reason=selection_reason,
     )
+
+    if response:
+        response.headers["X-Client-ID"] = client_id
 
     return GenerateResponse(
         text=validated.text,

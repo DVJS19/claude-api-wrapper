@@ -27,6 +27,39 @@ This project answers all of those questions with working code.
 
 Python · FastAPI · Anthropic SDK · Pydantic · python-jose (JWT) · UV
 
+## Auth
+
+OAuth2 Client Credentials flow, JWT issuance/verification, bcrypt secret hashing
+
+## Validation
+
+Pydantic request/response schemas, field validators, custom constraints
+
+## Model Routing
+
+Adapter pattern — Sonnet/Haiku with cost-based and budget-based selection 
+
+## Resilience
+
+Retry with exponential backoff, circuit breaker (3 states), failure fallback
+
+## Security
+
+Prompt injection detection, input sanitisation, output validation
+
+## Rate Limiting
+
+Token bucket per API key with lazy refill and precise Retry-After
+
+## Cost Control
+
+Per-request cost estimation + per-key daily soft/hard budget enforcement
+
+## Observability
+
+Structured JSON audit logs, per-request latency, X-Request-ID header
+
+
 ## Quick start
 
 ```bash
@@ -43,6 +76,8 @@ curl -X POST http://localhost:8001/oauth/token \
 # Use the token
 curl -X POST http://localhost:8001/generate \
   -H "Authorization: Bearer <token>"
-```
 
-## Git history
+# Check usage
+curl http://localhost:8001/usage \
+  -H "Authorization: Bearer "
+
