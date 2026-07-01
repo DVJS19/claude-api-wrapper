@@ -11,6 +11,8 @@ from app.security.input_validator import (
 from app.security.output_validator import validate_output
 from app.security.prompt_guard import PromptInjectionError, check_prompt_injection
 
+from app.adapters.sonnet_adapter import SonnetAdapter
+from app.adapters.haiku_adapter import HaikuAdapter
 from app.adapters.selector import selector
 from app.auth.oauth import (
     TokenResponse,
@@ -19,11 +21,17 @@ from app.auth.oauth import (
     seed_demo_client,
 )
 from app.config import settings
+from app.cost.tracker import BudgetHardLimitError, cost_tracker
+from app.rate_limit.rate_limiter import RateLimitExceededError, rate_limiter
 from app.models.request import GenerateRequest
 from app.models.response import GenerateResponse, UsageInfo
 from app.observability.logger import get_logger, setup_logging
 
 log = get_logger(__name__)
+
+# Adapter instances for direct use when budget forces a specific model
+_sonnet = SonnetAdapter()
+_haiku = HaikuAdapter()
 
 
 @asynccontextmanager
@@ -74,7 +82,14 @@ async def oauth_token(form_data: OAuth2PasswordRequestForm = Depends()):
     return issue_token(form_data.username, form_data.password)
 
 
+@app.get("/usage")
+async def usage(client_id: str = Depends(get_current_client_id)):
+    """Return current budget state for the authenticated client."""
+    return cost_tracker.get_summary(client_id)
+
+
 # ── Protected endpoints ────────────────────────────────────────────────────────
+
 
 @app.post("/generate", response_model=GenerateResponse)
 async def generate(
@@ -87,13 +102,15 @@ async def generate(
     Request flow:
         1. JWT verified (dependency)
         2. Pydantic validates request body
-        3. Prompt injection check
-        4. Input sanitisation
-        5. Adapter selected (cost-based routing)
-        6. Model called (with retry + circuit breaker + fallback)
-        7. Output validated (no_information / refusal detection)
-        8. Pydantic validates response
-        9. Structured audit log written
+        3. Rate limit checked (token bucket per API key)
+        4. Hard budget checked (reject if daily hard limit hit)
+        5. Prompt injection check
+        6. Input sanitisation
+        7. Adapter selected (cost-based routing)
+        8. Model called (with retry + circuit breaker + fallback)
+        9. Output validated (no_information / refusal detection)
+        10. Pydantic validates response
+        11. Structured audit log written
     """
     request_id = str(uuid.uuid4())
 
@@ -104,6 +121,34 @@ async def generate(
         prompt_len=len(request.prompt),
         has_system_context=request.system_context is not None,
     )
+
+    # ── Rate limiting ──────────────────────────────────────────────────────────
+    try:
+        rate_limiter.check(client_id)
+    except RateLimitExceededError as e:
+        log.warning(
+            "generate_rate_limited",
+            client_id=client_id,
+            request_id=request_id,
+            retry_after=e.retry_after_seconds,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded. Retry after {e.retry_after_seconds:.1f} seconds.",
+            headers={"Retry-After": str(int(e.retry_after_seconds) + 1)},
+        )
+
+    # ── Budget enforcement ─────────────────────────────────────────────────────
+    try:
+        forced_model = cost_tracker.get_forced_model(client_id)
+    except BudgetHardLimitError as e:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Daily budget exhausted (${e.spent:.4f} of ${e.limit:.2f}). "
+                f"Resets at UTC midnight."
+            ),
+        )
 
     # ── Security: prompt injection check ──────────────────────────────────────
     try:
@@ -140,16 +185,26 @@ async def generate(
         request.max_tokens if request.max_tokens is not None else settings.max_output_tokens
     )
 
-    # ── Adapter selection (cost-based routing) ────────────────────────────────
-    selection = selector.select_adapter(
-        caller_context=clean_context or "",
-        user_prompt=clean_prompt,
-        max_tokens=max_tokens,
-    )
-
-    is_primary_selected = selection.adapter.model_name == settings.primary_model
-    primary_adapter = selection.adapter if is_primary_selected else selector._fallback
-    fallback_adapter = selector._fallback if is_primary_selected else selector._primary
+    # ── Adapter selection ──────────────────────────────────────────────────────
+    # Budget enforcement overrides cost routing:
+    #   forced_model = None          → use cost routing as normal
+    #   forced_model = fallback name → soft limit hit, force Haiku regardless of cost
+    if forced_model:
+        primary_adapter = _haiku
+        fallback_adapter = _haiku  # both same — budget takes priority
+        selection_reason = f"budget soft limit hit — forced to {forced_model}"
+        log.info("adapter_forced_by_budget", client_id=client_id, model=forced_model)
+    else:
+        selection = selector.select_adapter(
+            caller_context=clean_context or "",
+            user_prompt=clean_prompt,
+            max_tokens=max_tokens,
+        )
+        primary_adapter = selection.adapter
+        fallback_adapter = (
+            _haiku if selection.adapter.model_name == settings.primary_model else _sonnet
+        )
+        selection_reason = selection.reason
 
     # ── Model call (retry + circuit breaker + fallback) ───────────────────────
     try:
@@ -188,7 +243,7 @@ async def generate(
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cost_usd=result.cost_usd,
-        selection_reason=selection.reason,
+        selection_reason=selection_reason,
     )
 
     return GenerateResponse(
