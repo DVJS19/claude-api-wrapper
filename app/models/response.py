@@ -30,6 +30,15 @@ class GenerateResponse(BaseModel):
         description="True if the fallback model was used instead of the primary.",
     )
 
+    output_status: str = Field(
+        default="ok",
+        description=(
+            "ok — normal response. "
+            "no_information — model had no relevant data, controlled message returned. "
+            "refused — model declined the request, controlled message returned."
+        ),
+    )
+
     usage: UsageInfo = Field(..., description="Token and cost accounting for this request.")
 
     request_id: str = Field(
