@@ -1,5 +1,5 @@
 """
-Phase 1 tests — OAuth2 client credentials flow.
+tests — OAuth2 client credentials flow.
 Run: uv run pytest tests/test_oauth.py -v
 """
 

@@ -8,21 +8,20 @@ requires-python = ">=3.11"
 dependencies = [
     # LLM
     "anthropic>=0.30.0",
-
     # API layer
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
-
     # Auth — OAuth2 client credentials flow
     "python-jose[cryptography]>=3.3.0",   # JWT signing/verification
-    "passlib[bcrypt]>=1.7.4",             # hash client secrets
-
+    "bcrypt>=4.3.0,<5",                   # hash client secrets
     # Utilities
     "python-dotenv>=1.0.0",
     "structlog>=24.0.0",
     "tenacity>=8.3.0",                    # retry with backoff
+    "python-multipart>=0.0.32",
+    "bcrypt<5",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +30,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "httpx>=0.27.0",
     "ruff>=0.4.0",
+    "debugpy>=1.8.0",
 ]
 
 [build-system]

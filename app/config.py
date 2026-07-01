@@ -6,6 +6,7 @@ Usage: from app.config import settings
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -18,6 +19,18 @@ class Settings(BaseSettings):
 
     # ── Anthropic ─────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
+
+    anthropic_api_key: str = ""
+
+    @field_validator("anthropic_api_key")
+    @classmethod
+    def validate_anthropic_key(cls, v: str) -> str:
+        if not v:
+            raise ValueError(
+                "ANTHROPIC_API_KEY is not set. "
+                "Add it to your .env file: ANTHROPIC_API_KEY=sk-ant-..."
+            )
+        return v
 
     # ── Models ────────────────────────────────────────────────────────────────
     primary_model: str = "claude-sonnet-4-6"

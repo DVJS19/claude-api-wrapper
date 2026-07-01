@@ -14,18 +14,16 @@ In production this would be a secrets manager or a dedicated auth service.
 
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from pydantic import BaseModel
 
 from app.config import settings
 from app.observability.logger import get_logger
 
 log = get_logger(__name__)
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # OAuth2PasswordBearer just tells FastAPI/OpenAPI docs where to get a token from.
 # We implement client_credentials grant manually below — this is the standard
@@ -41,7 +39,8 @@ _CLIENT_REGISTRY: dict[str, str] = {}
 
 def register_client(client_id: str, client_secret: str) -> None:
     """Register a client. Secret is hashed immediately — never stored in plaintext."""
-    _CLIENT_REGISTRY[client_id] = pwd_context.hash(client_secret)
+    hashed_secret = bcrypt.hashpw(client_secret.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    _CLIENT_REGISTRY[client_id] = hashed_secret
     log.info("oauth_client_registered", client_id=client_id)
 
 
@@ -54,7 +53,11 @@ def _verify_client(client_id: str, client_secret: str) -> bool:
     hashed = _CLIENT_REGISTRY.get(client_id)
     if not hashed:
         return False
-    return pwd_context.verify(client_secret, hashed)
+
+    try:
+        return bcrypt.checkpw(client_secret.encode("utf-8"), hashed.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 # ── Token models ─────────────────────────────────────────────────────────────────
